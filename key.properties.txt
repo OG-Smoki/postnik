@@ -1,0 +1,4 @@
+storePassword=znanjejezakon
+keyPassword=znanjejezakon
+keyAlias=postnik
+storeFile=postnik-keystore.jks
