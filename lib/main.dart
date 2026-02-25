@@ -371,8 +371,6 @@ class _FastingScreenState extends State<FastingScreen> {
   bool _timeSelected = false;
   bool _sessionSaved = false;
 
-  static const _accent = Color(0xFF6C63FF);
-
   bool _dark = true;
   Color get _onBg => _dark ? Colors.white : Colors.black87;
   Color get _onBgSubtle => _dark ? Colors.white38 : Colors.black38;
@@ -381,9 +379,6 @@ class _FastingScreenState extends State<FastingScreen> {
       ? const Color.fromRGBO(255, 255, 255, 0.06)
       : const Color.fromRGBO(108, 99, 255, 0.07);
   Color get _presetUnselectedBorder => _dark ? Colors.white24 : Colors.black12;
-  Color get _presetUnselectedText => _dark ? Colors.white54 : Colors.black54;
-  Color get _outlineBorderColor => _dark ? Colors.white30 : Colors.black26;
-  Color get _outlineTextColor => _dark ? Colors.white54 : Colors.black45;
 
   @override
   void initState() {
@@ -535,14 +530,6 @@ class _FastingScreenState extends State<FastingScreen> {
       : (_elapsed.inSeconds / _targetDuration.inSeconds).clamp(0.0, 1.0);
 
   bool get _isDone => _elapsed >= _targetDuration;
-
-  String _fmt(Duration d) {
-    if (d.isNegative) d = Duration.zero;
-    final h = d.inHours.toString().padLeft(2, '0');
-    final m = (d.inMinutes % 60).toString().padLeft(2, '0');
-    final s = (d.inSeconds % 60).toString().padLeft(2, '0');
-    return '$h:$m:$s';
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1554,7 +1541,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       trailing: Switch(
                         value: dark,
                         onChanged: (_) => widget.onToggleTheme(),
-                        activeColor: const Color(0xFF6C63FF),
+                        activeThumbColor: const Color(0xFF6C63FF),
                       ),
                     ),
                     SizedBox(height: sectionGap),
@@ -1573,7 +1560,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       trailing: Switch(
                         value: _notificationsEnabled,
                         onChanged: _setNotifications,
-                        activeColor: const Color(0xFF6C63FF),
+                        activeThumbColor: const Color(0xFF6C63FF),
                       ),
                     ),
                     tile(
@@ -1584,7 +1571,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       trailing: Switch(
                         value: _soundEnabled,
                         onChanged: _notificationsEnabled ? _setSound : null,
-                        activeColor: const Color(0xFF6C63FF),
+                        activeThumbColor: const Color(0xFF6C63FF),
                       ),
                     ),
                     SizedBox(height: sectionGap),
