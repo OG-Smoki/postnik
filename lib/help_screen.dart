@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
@@ -39,8 +40,8 @@ const _sections = [
     title: 'Začni / Ustavi / Ponastavi',
     items: [
       '"Začni" (ikona ▶) zažene odštevanje.',
-      '"Ustavi" (ikona ■) začasno zaustavi post – čas se ohrani.',
-      '"Ponastavi" (ikona ↺) shrani pretekli post v zgodovino in ponastavi timer.',
+      '"Ustavi" (ikona ■) zaustavi post in ga takoj shrani v zgodovino – čas se ohrani, post je mogoče nadaljevati.',
+      '"Ponastavi" (ikona ↺) ponastavi timer za nov post.',
       '"Znova" (ikona ▶) po zaključenem postu ponastavi timer za nov post.',
     ],
   ),
@@ -95,10 +96,17 @@ class HelpScreen extends StatelessWidget {
     final accent = PdfColor.fromHex('#6C63FF');
     final grey = PdfColors.grey700;
 
+    // Naloži Poppins fonte iz assetov – edina rešitev za šumnike v PDF-ju
+    final fontRegular = pw.Font.ttf(
+        await rootBundle.load('assets/fonts/Poppins-Regular.ttf'));
+    final fontBold = pw.Font.ttf(
+        await rootBundle.load('assets/fonts/Poppins-Bold.ttf'));
+
     pdf.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.all(40),
+        theme: pw.ThemeData.withFont(base: fontRegular, bold: fontBold),
         header: (_) => pw.Column(
           crossAxisAlignment: pw.CrossAxisAlignment.start,
           children: [

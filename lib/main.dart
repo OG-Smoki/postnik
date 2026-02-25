@@ -6,8 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:timezone/timezone.dart' as tz;
-import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'help_screen.dart';
 
 // ─── Notifications ────────────────────────────────────────
@@ -16,7 +14,6 @@ final FlutterLocalNotificationsPlugin _notifications =
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  tz_data.initializeTimeZones();
   await _notifications.initialize(
     const InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
@@ -305,8 +302,12 @@ class _MainScreenState extends State<MainScreen> {
   int _historyRefreshKey = 0;
 
   void _onTabChanged(int tab) {
-    if (tab == 1) setState(() => _historyRefreshKey++);
     setState(() => _tab = tab);
+    if (tab == 1) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _historyRefreshKey++);
+      });
+    }
   }
 
   @override
@@ -360,8 +361,7 @@ class FastingScreen extends StatefulWidget {
   State<FastingScreen> createState() => _FastingScreenState();
 }
 
-class _FastingScreenState extends State<FastingScreen>
-    with WidgetsBindingObserver {
+class _FastingScreenState extends State<FastingScreen> {
   Duration _targetDuration = const Duration(hours: 16);
   Duration _elapsed = Duration.zero;
   Duration _pausedElapsed = Duration.zero;
@@ -369,13 +369,9 @@ class _FastingScreenState extends State<FastingScreen>
   Timer? _timer;
   bool _isRunning = false;
   bool _timeSelected = false;
+  bool _sessionSaved = false;
 
   static const _accent = Color(0xFF6C63FF);
-
-  // Ključi za persistenco med sejo
-  static const _kStartMs    = 'fast_run_start_ms';
-  static const _kPausedSecs = 'fast_run_paused_secs';
-  static const _kTargetSecs = 'fast_run_target_secs';
 
   bool _dark = true;
   Color get _onBg => _dark ? Colors.white : Colors.black87;
@@ -392,7 +388,6 @@ class _FastingScreenState extends State<FastingScreen>
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     _notifications
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
@@ -401,124 +396,31 @@ class _FastingScreenState extends State<FastingScreen>
         .resolvePlatformSpecificImplementation<
             IOSFlutterLocalNotificationsPlugin>()
         ?.requestPermissions(alert: true, badge: true, sound: true);
-    _restoreRunningState();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _dark = Theme.of(context).brightness == Brightness.dark;
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     super.dispose();
   }
 
-  // ── App lifecycle: sinhronizacija ob vrnitvi v ospredje ──
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed &&
-        _isRunning &&
-        _startTime != null) {
-      _timer?.cancel();
-      final elapsed =
-          _pausedElapsed + DateTime.now().difference(_startTime!);
-      if (elapsed >= _targetDuration) {
-        _clearRunningState();
-        HistoryService.add(FastRecord(
-          startTime: _startTime!,
-          elapsed: elapsed,
-          target: _targetDuration,
-          completed: true,
-        ));
-        setState(() {
-          _elapsed = elapsed;
-          _isRunning = false;
-        });
-        WidgetsBinding.instance
-            .addPostFrameCallback((_) => _showDoneDialog());
-      } else {
-        setState(() => _elapsed = elapsed);
-        _startTimer();
-      }
-    }
-  }
-
-  // ── Persistenca stanja ────────────────────────────────────
-  Future<void> _saveRunningState() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_kStartMs, _startTime!.millisecondsSinceEpoch);
-    await prefs.setInt(_kPausedSecs, _pausedElapsed.inSeconds);
-    await prefs.setInt(_kTargetSecs, _targetDuration.inSeconds);
-  }
-
-  Future<void> _clearRunningState() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_kStartMs);
-    await prefs.remove(_kPausedSecs);
-    await prefs.remove(_kTargetSecs);
-  }
-
-  Future<void> _restoreRunningState() async {
-    final prefs = await SharedPreferences.getInstance();
-    final startMs = prefs.getInt(_kStartMs);
-    if (startMs == null) return;
-    final pausedSecs = prefs.getInt(_kPausedSecs) ?? 0;
-    final targetSecs = prefs.getInt(_kTargetSecs);
-    if (targetSecs == null) return;
-
-    final startTime = DateTime.fromMillisecondsSinceEpoch(startMs);
-    final pausedElapsed = Duration(seconds: pausedSecs);
-    final targetDuration = Duration(seconds: targetSecs);
-    final elapsed = pausedElapsed + DateTime.now().difference(startTime);
-
-    if (elapsed >= targetDuration) {
-      // Post je bil zaključen medtem ko je bila app v ozadju
-      await _clearRunningState();
-      await HistoryService.add(FastRecord(
-        startTime: startTime,
-        elapsed: elapsed,
-        target: targetDuration,
-        completed: true,
-      ));
-      if (!mounted) return;
-      setState(() {
-        _startTime = startTime;
-        _pausedElapsed = pausedElapsed;
-        _targetDuration = targetDuration;
-        _elapsed = elapsed;
-        _isRunning = false;
-        _timeSelected = true;
-      });
-      WidgetsBinding.instance
-          .addPostFrameCallback((_) => _showDoneDialog());
-    } else {
-      if (!mounted) return;
-      setState(() {
-        _startTime = startTime;
-        _pausedElapsed = pausedElapsed;
-        _targetDuration = targetDuration;
-        _elapsed = elapsed;
-        _isRunning = true;
-        _timeSelected = true;
-      });
-      _startTimer();
-    }
-  }
-
-  // ── Zaplanira sistemsko obvestilo ob zaključku posta ─────
-  Future<void> _scheduleCompletionNotification() async {
+  Future<void> _sendNotification() async {
     final prefs = await SharedPreferences.getInstance();
     if (!(prefs.getBool('notifications_enabled') ?? true)) return;
     final soundEnabled = prefs.getBool('sound_enabled') ?? true;
-    final completionTime =
-        _startTime!.add(_targetDuration - _pausedElapsed);
-    if (completionTime.isBefore(DateTime.now())) return;
-
     final details = NotificationDetails(
       android: AndroidNotificationDetails(
         soundEnabled ? 'postnik_done_sound' : 'postnik_done_silent',
         soundEnabled ? 'Konec posta (zvok)' : 'Konec posta (tiho)',
         channelDescription: 'Obvestilo ob zaključku posta',
-        importance: soundEnabled ? Importance.max : Importance.low,
-        priority: soundEnabled ? Priority.max : Priority.low,
+        importance: soundEnabled ? Importance.high : Importance.low,
+        priority: soundEnabled ? Priority.high : Priority.low,
         playSound: soundEnabled,
         enableVibration: soundEnabled,
         silent: !soundEnabled,
@@ -529,21 +431,8 @@ class _FastingScreenState extends State<FastingScreen>
         presentSound: soundEnabled,
       ),
     );
-    await _notifications.zonedSchedule(
-      1,
-      'Post je zaključen.',
-      'Čas je za zavesten obrok.',
-      tz.TZDateTime.fromMillisecondsSinceEpoch(
-          tz.UTC, completionTime.millisecondsSinceEpoch),
-      details,
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
-    );
-  }
-
-  Future<void> _cancelScheduledNotification() async {
-    await _notifications.cancel(1);
+    await _notifications.show(
+        1, 'Post je zaključen.', 'Čas je za zavesten obrok.', details);
   }
 
   void _showDoneDialog() {
@@ -572,56 +461,40 @@ class _FastingScreenState extends State<FastingScreen>
     );
   }
 
-  // UI timer — teče samo ko je app v ospredju
-  void _startTimer() {
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      setState(() =>
-          _elapsed = _pausedElapsed + DateTime.now().difference(_startTime!));
-      if (_elapsed >= _targetDuration) {
-        _timer?.cancel();
-        _clearRunningState();
-        setState(() => _isRunning = false);
-        HistoryService.add(FastRecord(
-          startTime: _startTime!,
-          elapsed: _elapsed,
-          target: _targetDuration,
-          completed: true,
-        ));
-        WidgetsBinding.instance
-            .addPostFrameCallback((_) => _showDoneDialog());
-      }
-    });
-  }
-
-  void _startStop() {
+  Future<void> _startStop() async {
     if (_isRunning) {
       _timer?.cancel();
-      _cancelScheduledNotification();
-      _clearRunningState();
       setState(() {
         _pausedElapsed = _elapsed;
         _isRunning = false;
       });
+      if (_elapsed > Duration.zero && !_sessionSaved) {
+        await HistoryService.add(_buildRecord(completed: false));
+        _sessionSaved = true;
+      }
     } else {
       _startTime = DateTime.now();
+      _timer = Timer.periodic(const Duration(seconds: 1), (_) async {
+        setState(() =>
+            _elapsed = _pausedElapsed + DateTime.now().difference(_startTime!));
+        if (_elapsed >= _targetDuration) {
+          _timer?.cancel();
+          setState(() => _isRunning = false);
+          await HistoryService.add(_buildRecord(completed: true));
+          _sessionSaved = true;
+          await _sendNotification();
+          WidgetsBinding.instance
+              .addPostFrameCallback((_) => _showDoneDialog());
+        }
+      });
       setState(() => _isRunning = true);
-      _saveRunningState();
-      _scheduleCompletionNotification();
-      _startTimer();
     }
   }
 
   // Shrani in ponastavi (gumb Ponastavi)
-  void _saveAndReset() {
-    _cancelScheduledNotification();
-    _clearRunningState();
-    if (_elapsed > Duration.zero) {
-      HistoryService.add(FastRecord(
-        startTime: _startTime ?? DateTime.now().subtract(_elapsed),
-        elapsed: _elapsed,
-        target: _targetDuration,
-        completed: false,
-      ));
+  Future<void> _saveAndReset() async {
+    if (_elapsed > Duration.zero && !_sessionSaved) {
+      await HistoryService.add(_buildRecord(completed: false));
     }
     _timer?.cancel();
     setState(() {
@@ -630,29 +503,38 @@ class _FastingScreenState extends State<FastingScreen>
       _isRunning = false;
       _startTime = null;
       _timeSelected = false;
+      _sessionSaved = false;
     });
   }
 
   // Tiho ponastavi (menjava preset/picker)
   void _resetSilently({Duration? newTarget, bool select = false}) {
-    _cancelScheduledNotification();
-    _clearRunningState();
     _timer?.cancel();
     setState(() {
       _elapsed = Duration.zero;
       _pausedElapsed = Duration.zero;
       _isRunning = false;
       _startTime = null;
+      _sessionSaved = false;
       if (newTarget != null) _targetDuration = newTarget;
       if (select) _timeSelected = true;
     });
+  }
+
+  FastRecord _buildRecord({required bool completed}) {
+    return FastRecord(
+      startTime: _startTime ?? DateTime.now().subtract(_elapsed),
+      elapsed: _elapsed,
+      target: _targetDuration,
+      completed: completed,
+    );
   }
 
   double get _progress => _targetDuration.inSeconds == 0
       ? 0
       : (_elapsed.inSeconds / _targetDuration.inSeconds).clamp(0.0, 1.0);
 
-  bool get _isDone => _elapsed >= _targetDuration && _elapsed > Duration.zero;
+  bool get _isDone => _elapsed >= _targetDuration;
 
   String _fmt(Duration d) {
     if (d.isNegative) d = Duration.zero;
@@ -664,138 +546,134 @@ class _FastingScreenState extends State<FastingScreen>
 
   @override
   Widget build(BuildContext context) {
-    _dark = Theme.of(context).brightness == Brightness.dark;
     final remaining = _targetDuration - _elapsed;
     return Scaffold(
       backgroundColor: _dark ? const Color(0xFF0F0F1A) : const Color(0xFFF0EEFF),
       body: Column(
         children: [
           // Header – seže do samega vrha ekrana
-          Builder(builder: (context) {
-            final screenH = MediaQuery.of(context).size.height;
-            final iconSz    = (screenH * 0.063).clamp(36.0, 52.0);
-            final fontSize  = (screenH * 0.032).clamp(18.0, 26.0);
-            final padBottom = (screenH * 0.024).clamp(12.0, 20.0);
-            final toggleW   = (screenH * 0.065).clamp(42.0, 52.0);
-            final toggleH   = (screenH * 0.035).clamp(22.0, 28.0);
-            final knobSz    = toggleH - 6;
-            return Container(
-              width: double.infinity,
-              padding: EdgeInsets.only(
-                top: MediaQuery.of(context).padding.top + 12,
-                bottom: padBottom,
+          Container(
+            width: double.infinity,
+            padding: EdgeInsets.only(
+              top: MediaQuery.of(context).padding.top + 16,
+              bottom: 20,
+            ),
+            decoration: BoxDecoration(
+              color: _dark ? const Color(0xFF1A1A2E) : const Color(0xFFE8E0FF),
+              border: Border(
+                bottom: BorderSide(
+                  color: _dark ? Colors.white12 : Colors.black12,
+                  width: 1,
+                ),
               ),
-              decoration: BoxDecoration(
-                color: _dark ? const Color(0xFF1A1A2E) : const Color(0xFFE8E0FF),
-              ),
-              child: Row(
-                children: [
-                  const SizedBox(width: 10),
-                  ShaderMask(
-                    blendMode: BlendMode.srcIn,
-                    shaderCallback: (bounds) => const LinearGradient(
-                      colors: [Color(0xFFD4CFFF), Color(0xFF6C63FF), Color(0xFF3D35CC)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ).createShader(bounds),
-                    child: SvgPicture.asset(
-                      'assets/images/icon_org-01.svg',
-                      width: iconSz,
-                      height: iconSz,
-                      colorFilter: const ColorFilter.mode(
-                        Colors.white,
-                        BlendMode.srcIn,
-                      ),
+            ),
+            child: Row(
+              children: [
+                const SizedBox(width: 10),
+                ShaderMask(
+                  blendMode: BlendMode.srcIn,
+                  shaderCallback: (bounds) => const LinearGradient(
+                    colors: [Color(0xFFD4CFFF), Color(0xFF6C63FF), Color(0xFF3D35CC)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ).createShader(bounds),
+                  child: SvgPicture.asset(
+                    'assets/images/icon_org-01.svg',
+                    width: 52,
+                    height: 52,
+                    colorFilter: const ColorFilter.mode(
+                      Colors.white,
+                      BlendMode.srcIn,
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  ShaderMask(
-                    shaderCallback: (bounds) => const LinearGradient(
-                      colors: [Color(0xFFB8AEFF), Color(0xFF6C63FF)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ).createShader(bounds),
-                    child: RichText(
-                      text: TextSpan(
-                        children: [
-                          TextSpan(
-                            text: 'POST',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: fontSize,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 3,
-                              fontFamily: 'Poppins',
-                            ),
+                ),
+                const SizedBox(width: 10),
+                ShaderMask(
+                  shaderCallback: (bounds) => const LinearGradient(
+                    colors: [Color(0xFFB8AEFF), Color(0xFF6C63FF)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ).createShader(bounds),
+                  child: RichText(
+                    text: const TextSpan(
+                      children: [
+                        TextSpan(
+                          text: 'POST',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 26,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 3,
+                            fontFamily: 'Poppins',
                           ),
-                          TextSpan(
-                            text: 'NIK',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: fontSize,
-                              fontWeight: FontWeight.w300,
-                              letterSpacing: 3,
-                              fontFamily: 'Poppins',
-                            ),
+                        ),
+                        TextSpan(
+                          text: 'NIK',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 26,
+                            fontWeight: FontWeight.w300,
+                            letterSpacing: 3,
+                            fontFamily: 'Poppins',
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
-                  const Spacer(),
-                  AnimatedSwitcher(
+                ),
+                const Spacer(),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 300),
+                  transitionBuilder: (child, anim) =>
+                      FadeTransition(opacity: anim, child: ScaleTransition(scale: anim, child: child)),
+                  child: _GradientIcon(
+                    _dark ? Icons.dark_mode_rounded : Icons.wb_sunny_rounded,
+                    size: 20,
+                    key: ValueKey(_dark),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: widget.onToggleTheme,
+                  child: AnimatedContainer(
                     duration: const Duration(milliseconds: 300),
-                    transitionBuilder: (child, anim) =>
-                        FadeTransition(opacity: anim, child: ScaleTransition(scale: anim, child: child)),
-                    child: _GradientIcon(
-                      _dark ? Icons.dark_mode_rounded : Icons.wb_sunny_rounded,
-                      size: 20,
-                      key: ValueKey(_dark),
+                    curve: Curves.easeInOut,
+                    width: 52,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(50),
+                      color: _dark
+                          ? const Color(0xFF3A3560)
+                          : const Color(0xFFD0CAFF),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  GestureDetector(
-                    onTap: widget.onToggleTheme,
-                    child: AnimatedContainer(
+                    child: AnimatedAlign(
                       duration: const Duration(milliseconds: 300),
                       curve: Curves.easeInOut,
-                      width: toggleW,
-                      height: toggleH,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(50),
-                        color: _dark
-                            ? const Color(0xFF3A3560)
-                            : const Color(0xFFD0CAFF),
-                      ),
-                      child: AnimatedAlign(
-                        duration: const Duration(milliseconds: 300),
-                        curve: Curves.easeInOut,
-                        alignment: _dark
-                            ? Alignment.centerRight
-                            : Alignment.centerLeft,
-                        child: Padding(
-                          padding: const EdgeInsets.all(3),
-                          child: Container(
-                            width: knobSz,
-                            height: knobSz,
-                            decoration: const BoxDecoration(
-                              shape: BoxShape.circle,
-                              gradient: LinearGradient(
-                                colors: [Color(0xFFB8AEFF), Color(0xFF6C63FF)],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              ),
+                      alignment: _dark
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft,
+                      child: Padding(
+                        padding: const EdgeInsets.all(3),
+                        child: Container(
+                          width: 22,
+                          height: 22,
+                          decoration: const BoxDecoration(
+                            shape: BoxShape.circle,
+                            gradient: LinearGradient(
+                              colors: [Color(0xFFB8AEFF), Color(0xFF6C63FF)],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
                             ),
                           ),
                         ),
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
-                ],
-              ),
-            );
-          }),
+                ),
+                const SizedBox(width: 12),
+              ],
+            ),
+          ),
           // Vsebina pod headerjem
           Expanded(
             child: SafeArea(
@@ -807,9 +685,9 @@ class _FastingScreenState extends State<FastingScreen>
                   final timerSize = math.min(availH * 0.43, availW * 0.84).clamp(120.0, 270.0);
                   final sp1 = (availH * 0.025).clamp(4.0, 28.0);
                   final sp2 = (availH * 0.018).clamp(3.0, 22.0);
+                  final sp3 = (availH * 0.012).clamp(2.0, 14.0);
                   final btnPadV = (availH * 0.020).clamp(8.0, 15.0);
                   final presetPadV = (availH * 0.026).clamp(7.0, 13.0);
-                  final sp3 = (availH * 0.045).clamp(16.0, 40.0);
                   return SingleChildScrollView(
                     physics: const ClampingScrollPhysics(),
                     child: ConstrainedBox(
@@ -1237,6 +1115,7 @@ class _FastingScreenState extends State<FastingScreen>
     IconData? icon,
     bool outline = false,
     double vertPad = 15,
+    bool iconOnly = false,
   }) {
     const btnColor = Color(0xFF7B9CFF);
     const textDark = Color(0xFF0F0F2E);
@@ -1251,7 +1130,9 @@ class _FastingScreenState extends State<FastingScreen>
       child: Opacity(
         opacity: disabled ? 0.35 : 1.0,
         child: Container(
-          padding: EdgeInsets.symmetric(horizontal: 32, vertical: vertPad),
+          padding: iconOnly
+              ? EdgeInsets.all(vertPad)
+              : EdgeInsets.symmetric(horizontal: 32, vertical: vertPad),
           decoration: BoxDecoration(
             gradient: outline ? null : gradient,
             color: outline ? Colors.transparent : null,
@@ -1262,21 +1143,23 @@ class _FastingScreenState extends State<FastingScreen>
             borderRadius: BorderRadius.circular(50),
             boxShadow: null,
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (icon != null) ...[
-                Icon(icon, size: 22, color: outline ? btnColor : textDark),
-                const SizedBox(width: 8),
-              ],
-              Text(label,
-                  style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: outline ? btnColor : textDark,
-                      letterSpacing: 0.3)),
-            ],
-          ),
+          child: iconOnly
+              ? Icon(icon, size: 22, color: outline ? btnColor : textDark)
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (icon != null) ...[
+                      Icon(icon, size: 22, color: outline ? btnColor : textDark),
+                      const SizedBox(width: 8),
+                    ],
+                    Text(label,
+                        style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: outline ? btnColor : textDark,
+                            letterSpacing: 0.3)),
+                  ],
+                ),
         ),
       ),
     );
@@ -1296,13 +1179,14 @@ class _FastingScreenState extends State<FastingScreen>
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        if (_elapsed > Duration.zero && !_isRunning && !_isDone) ...[
+        if (_elapsed > Duration.zero && !_isRunning) ...[
           _glossyButton(
               label: 'Ponastavi',
               icon: Icons.refresh_rounded,
               onTap: _saveAndReset,
               outline: true,
-              vertPad: btnPadV),
+              vertPad: btnPadV,
+              iconOnly: true),
           const SizedBox(width: 12),
         ],
         _glossyButton(
@@ -1459,7 +1343,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     itemBuilder: (_, i) {
                       final r = _records[i];
                       final pct = (r.elapsed.inSeconds /
-                              r.target.inSeconds.clamp(1, double.maxFinite))
+                              math.max(1, r.target.inSeconds))
                           .clamp(0.0, 1.0);
                       return Container(
                         margin: const EdgeInsets.only(bottom: 12),
@@ -1769,9 +1653,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ],
           ),
-        ),
-      ),
-    );
+              ),
+            ),
+          );
         },
       ),
     );
