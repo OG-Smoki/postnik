@@ -92,6 +92,24 @@ class HelpScreen extends StatelessWidget {
   const HelpScreen({super.key});
 
   Future<void> _exportPdf(BuildContext context) async {
+    try {
+      await _buildAndSharePdf(context);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Napaka pri izvozu PDF: $e')),
+        );
+      }
+    }
+  }
+
+  // Zamenja Unicode simbole, ki jih Poppins ne podpira, z ASCII ekvivalenti
+  static String _pdfSafe(String text) => text
+      .replaceAll('▶', '-')
+      .replaceAll('■', '-')
+      .replaceAll('↺', '-');
+
+  Future<void> _buildAndSharePdf(BuildContext context) async {
     final pdf = pw.Document();
     final accent = PdfColor.fromHex('#6C63FF');
     final grey = PdfColors.grey700;
@@ -143,7 +161,7 @@ class HelpScreen extends StatelessWidget {
                         style:
                             pw.TextStyle(color: accent, fontSize: 12)),
                     pw.Expanded(
-                      child: pw.Text(item,
+                      child: pw.Text(_pdfSafe(item),
                           style: pw.TextStyle(
                               fontSize: 12,
                               color: PdfColors.black,
