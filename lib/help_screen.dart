@@ -15,7 +15,7 @@ const _intro =
 const _sections = [
   _HelpSection(
     icon: Icons.timer,
-    title: 'Timer',
+    title: 'Časovnik',
     items: [
       'Velika številka prikazuje preostali čas do konca posta.',
       'Krožni obroč s gradientom (roza → vijolična → zelena) prikazuje napredek posta.',
@@ -32,7 +32,7 @@ const _sections = [
       'Nad gumbi je napis "Izberi čas" za lažjo orientacijo.',
       'Gumbi 8, 16 in 24 ur hitro nastavijo najpogostejše dolžine posta.',
       'Gumb "Nastavi čas" odpre kolesce za natančnejšo nastavitev po urah in minutah.',
-      'Menjava dolžine med tekom timerja ni možna – najprej ustavi post.',
+      'Menjava dolžine med tekom časovnika ni možna – najprej ustavi post.',
     ],
   ),
   _HelpSection(
@@ -41,8 +41,8 @@ const _sections = [
     items: [
       '"Začni" (ikona ▶) zažene odštevanje.',
       '"Ustavi" (ikona ■) zaustavi post in ga takoj shrani v zgodovino – čas se ohrani, post je mogoče nadaljevati.',
-      '"Ponastavi" (ikona ↺) ponastavi timer za nov post.',
-      '"Znova" (ikona ▶) po zaključenem postu ponastavi timer za nov post.',
+      '"Ponastavi" (ikona ↺) ponastavi časovnik za nov post.',
+      '"Znova" (ikona ▶) po zaključenem postu ponastavi časovnik za nov post.',
     ],
   ),
   _HelpSection(
@@ -103,11 +103,10 @@ class HelpScreen extends StatelessWidget {
     }
   }
 
-  // Zamenja Unicode simbole, ki jih Poppins ne podpira, z ASCII ekvivalenti
+  // Odstrani/zamenja simbole brez podpore v Poppinsu
   static String _pdfSafe(String text) => text
-      .replaceAll('▶', '-')
-      .replaceAll('■', '-')
-      .replaceAll('↺', '-');
+      .replaceAll(RegExp(r'\s*\(ikona\s[^)]+\)'), '')
+      .replaceAll('→', '->');
 
   Future<void> _buildAndSharePdf(BuildContext context) async {
     final pdf = pw.Document();

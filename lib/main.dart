@@ -361,7 +361,8 @@ class FastingScreen extends StatefulWidget {
   State<FastingScreen> createState() => _FastingScreenState();
 }
 
-class _FastingScreenState extends State<FastingScreen> {
+class _FastingScreenState extends State<FastingScreen>
+    with WidgetsBindingObserver {
   Duration _targetDuration = const Duration(hours: 16);
   Duration _elapsed = Duration.zero;
   Duration _pausedElapsed = Duration.zero;
@@ -383,6 +384,7 @@ class _FastingScreenState extends State<FastingScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _notifications
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
@@ -391,6 +393,7 @@ class _FastingScreenState extends State<FastingScreen> {
         .resolvePlatformSpecificImplementation<
             IOSFlutterLocalNotificationsPlugin>()
         ?.requestPermissions(alert: true, badge: true, sound: true);
+    _restoreState();
   }
 
   @override
@@ -401,8 +404,17 @@ class _FastingScreenState extends State<FastingScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _saveState();
+    }
   }
 
   Future<void> _sendNotification() async {
@@ -467,6 +479,7 @@ class _FastingScreenState extends State<FastingScreen> {
         await HistoryService.add(_buildRecord(completed: false));
         _sessionSaved = true;
       }
+      await _saveState();
     } else {
       _startTime = DateTime.now();
       _timer = Timer.periodic(const Duration(seconds: 1), (_) async {
@@ -475,14 +488,18 @@ class _FastingScreenState extends State<FastingScreen> {
         if (_elapsed >= _targetDuration) {
           _timer?.cancel();
           setState(() => _isRunning = false);
-          await HistoryService.add(_buildRecord(completed: true));
-          _sessionSaved = true;
+          if (!_sessionSaved) {
+            await HistoryService.add(_buildRecord(completed: true));
+            _sessionSaved = true;
+          }
+          await _saveState();
           await _sendNotification();
           WidgetsBinding.instance
               .addPostFrameCallback((_) => _showDoneDialog());
         }
       });
       setState(() => _isRunning = true);
+      await _saveState();
     }
   }
 
@@ -500,6 +517,7 @@ class _FastingScreenState extends State<FastingScreen> {
       _timeSelected = false;
       _sessionSaved = false;
     });
+    await _saveState(); // _startTime == null && _elapsed == zero → auto-clear
   }
 
   // Tiho ponastavi (menjava preset/picker)
@@ -514,6 +532,7 @@ class _FastingScreenState extends State<FastingScreen> {
       if (newTarget != null) _targetDuration = newTarget;
       if (select) _timeSelected = true;
     });
+    _clearSavedState(); // fire-and-forget
   }
 
   FastRecord _buildRecord({required bool completed}) {
@@ -547,12 +566,6 @@ class _FastingScreenState extends State<FastingScreen> {
             ),
             decoration: BoxDecoration(
               color: _dark ? const Color(0xFF1A1A2E) : const Color(0xFFE8E0FF),
-              border: Border(
-                bottom: BorderSide(
-                  color: _dark ? Colors.white12 : Colors.black12,
-                  width: 1,
-                ),
-              ),
             ),
             child: Row(
               children: [
@@ -682,7 +695,60 @@ class _FastingScreenState extends State<FastingScreen> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          _buildTimer(remaining, timerSize),
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _buildTimer(remaining, timerSize),
+                              if (_startTime != null) ...[
+                                const SizedBox(height: 6),
+                                SizedBox(
+                                  width: timerSize,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text('Začetek',
+                                                style: TextStyle(
+                                                    color: _onBgSubtle,
+                                                    fontSize: 9,
+                                                    letterSpacing: 0.3)),
+                                            Text(
+                                                _fmtDt(_startTime!.subtract(_pausedElapsed)),
+                                                style: TextStyle(
+                                                    color: _onBg.withValues(alpha: 0.65),
+                                                    fontSize: 11,
+                                                    fontWeight: FontWeight.w500)),
+                                          ],
+                                        ),
+                                        Column(
+                                          crossAxisAlignment: CrossAxisAlignment.end,
+                                          children: [
+                                            Text('Zaključek',
+                                                style: TextStyle(
+                                                    color: _onBgSubtle,
+                                                    fontSize: 9,
+                                                    letterSpacing: 0.3)),
+                                            Text(
+                                                _fmtDt(_startTime!
+                                                    .subtract(_pausedElapsed)
+                                                    .add(_targetDuration)),
+                                                style: TextStyle(
+                                                    color: _onBg.withValues(alpha: 0.65),
+                                                    fontSize: 11,
+                                                    fontWeight: FontWeight.w500)),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
                           SizedBox(height: sp1),
                           _buildPresets(presetPadV: presetPadV),
                           SizedBox(height: sp2),
@@ -700,6 +766,105 @@ class _FastingScreenState extends State<FastingScreen> {
         ],
       ),
     );
+  }
+
+  // ─── State persistence ────────────────────────────────────
+  static const _kStartMs   = 'fasting_start_ms';
+  static const _kPausedSec = 'fasting_paused_sec';
+  static const _kTargetSec = 'fasting_target_sec';
+  static const _kRunning   = 'fasting_running';
+  static const _kSaved     = 'fasting_saved';
+  static const _kSelected  = 'fasting_selected';
+
+  Future<void> _saveState() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (_startTime == null && _elapsed == Duration.zero) {
+      await _clearSavedState(prefs: prefs);
+      return;
+    }
+    await prefs.setInt(_kStartMs,   _startTime?.millisecondsSinceEpoch ?? 0);
+    await prefs.setInt(_kPausedSec, _pausedElapsed.inSeconds);
+    await prefs.setInt(_kTargetSec, _targetDuration.inSeconds);
+    await prefs.setBool(_kRunning,  _isRunning);
+    await prefs.setBool(_kSaved,    _sessionSaved);
+    await prefs.setBool(_kSelected, _timeSelected);
+  }
+
+  Future<void> _clearSavedState({SharedPreferences? prefs}) async {
+    prefs ??= await SharedPreferences.getInstance();
+    for (final k in [_kStartMs, _kPausedSec, _kTargetSec, _kRunning, _kSaved, _kSelected]) {
+      await prefs.remove(k);
+    }
+  }
+
+  Future<void> _restoreState() async {
+    final prefs = await SharedPreferences.getInstance();
+    final startMs = prefs.getInt(_kStartMs);
+    if (startMs == null || startMs == 0) return;
+
+    final startTime     = DateTime.fromMillisecondsSinceEpoch(startMs);
+    final pausedElapsed = Duration(seconds: prefs.getInt(_kPausedSec) ?? 0);
+    final target        = Duration(seconds: prefs.getInt(_kTargetSec) ?? (16 * 3600));
+    final wasRunning    = prefs.getBool(_kRunning)  ?? false;
+    final sessionSaved  = prefs.getBool(_kSaved)    ?? false;
+    final timeSelected  = prefs.getBool(_kSelected) ?? false;
+
+    if (!mounted) return;
+
+    final currentElapsed = wasRunning
+        ? (pausedElapsed + DateTime.now().difference(startTime))
+        : pausedElapsed;
+
+    setState(() {
+      _startTime      = startTime;
+      _pausedElapsed  = pausedElapsed;
+      _targetDuration = target;
+      _sessionSaved   = sessionSaved;
+      _timeSelected   = timeSelected;
+      _elapsed        = currentElapsed;
+      _isRunning      = false;
+    });
+
+    if (!wasRunning) return;
+
+    // Post je bil že zaključen med zaprtjem aplikacije
+    if (currentElapsed >= target) {
+      if (!sessionSaved) {
+        await HistoryService.add(_buildRecord(completed: true));
+        _sessionSaved = true;
+      }
+      await _saveState();
+      await _sendNotification();
+      if (mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _showDoneDialog());
+      }
+      return;
+    }
+
+    // Post še teče – nadaljuj odštevanje
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) async {
+      setState(() =>
+          _elapsed = _pausedElapsed + DateTime.now().difference(_startTime!));
+      if (_elapsed >= _targetDuration) {
+        _timer?.cancel();
+        setState(() => _isRunning = false);
+        if (!_sessionSaved) {
+          await HistoryService.add(_buildRecord(completed: true));
+          _sessionSaved = true;
+        }
+        await _saveState();
+        await _sendNotification();
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) => _showDoneDialog());
+      }
+    });
+    if (mounted) setState(() => _isRunning = true);
+  }
+
+  String _fmtDt(DateTime dt) {
+    final h = dt.hour.toString().padLeft(2, '0');
+    final m = dt.minute.toString().padLeft(2, '0');
+    return '${dt.day}. ${dt.month}. ob $h:$m';
   }
 
   Widget _buildTimer(Duration remaining, double size) {
